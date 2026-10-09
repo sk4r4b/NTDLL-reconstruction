@@ -9,8 +9,10 @@
 #ifndef NTDLL_RECONSTRUCTION_H_
 #define NTDLL_RECONSTRUCTION_H_
 
-#include "sk4r4b.h"
+//#define RESOLVER_OPTIMIZATION
+//#include "sk4r4b.h"
 #include <windows.h>
+#include <winternl.h>
 
 #define NTDLL_RECONSTRUCTION_DEPTH 20
 #define REPLACE_SIZE 11
@@ -28,8 +30,8 @@ struct hook_cache {
 	struct hook_cache	*next;
 };
 
-struct hook_cache	*ntdll_reconstruction_init(void); // return null if nothing is hooked
-struct hook_cache	*ntdll_reconstruction_flip(struct hook_cache *);
-void				ntdll_reconstruction_clear_cache(struct hook_cache *);
+struct hook_cache	*ntdll_reconstruction_init(void);                      // Setup the cache and unhook ntdll.dll.
+struct hook_cache	*ntdll_reconstruction_flip(struct hook_cache *);       // Flip back and fourth.
+void				ntdll_reconstruction_clear_cache(struct hook_cache *); // Destroy cache and cleanup.
 
 #endif
