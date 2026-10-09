@@ -1,4 +1,7 @@
 # NTDLL-reconstruction
+
+<img src="res/banner.png"/>
+
 A userland EDR bypass technique that allows you to flip between unhooked and hooked ntdll.dll at will.
 How I built this can be found [here](https://leosmith.wtf/blog/ntdll_reconstruction.html).
 
