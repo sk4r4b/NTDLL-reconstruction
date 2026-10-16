@@ -1,0 +1,67 @@
+--- ntdll_reconstruction.c	2026-10-09 22:02:21.118534023 +0200
++++ ntdll_reconstruction.c	2026-10-16 09:53:05.804488256 +0200
+@@ -208,56 +208,32 @@ struct hook_cache		*ntdll_reconstruction
+ 
+ struct hook_cache			*ntdll_reconstruction_flip(struct hook_cache *cache)
+ {
+-	void					*ntdll_ptr = 0;
+-	IMAGE_DOS_HEADER		*dos = 0;
+-	IMAGE_NT_HEADERS		*nt = 0;
+-	void					*code_base = 0;
+-	unsigned long long		code_size = 0;
+ 	DWORD					old_protection = 0;
+ 	struct hook_cache		*tmp = cache;
+ 	unsigned char			*memory = 0;
+ 	char					ch = 0;
+ 
+-	if (cache == 0)
+-		return				(0);
+-	ntdll_ptr = get_local_ntdll();
+-	if (ntdll_ptr == 0) {
+-		ntdll_reconstruction_clear_cache(cache);
+-		return				(0);
+-	}
+-	dos = (IMAGE_DOS_HEADER *)ntdll_ptr;
+-	if (dos->e_magic != IMAGE_DOS_SIGNATURE) {
+-		ntdll_reconstruction_clear_cache(cache);
+-		return				(0);
+-	}
+-	nt = (IMAGE_NT_HEADERS *)((unsigned char *)ntdll_ptr + dos->e_lfanew);
+-	if (nt->Signature != IMAGE_NT_SIGNATURE) {
+-		ntdll_reconstruction_clear_cache(cache);
+-		return				(0);
+-	}
+-	code_base = (void *)((unsigned char *)ntdll_ptr + nt->OptionalHeader.BaseOfCode);
+-	code_size = (unsigned long long)(nt->OptionalHeader.SizeOfCode);
+-	if (!switch_memory_protection(code_base, code_size, PAGE_READWRITE, &old_protection)) {
+-		ntdll_reconstruction_clear_cache(cache);
+-		return				(0);
+-	}
+ 	while (tmp) {
+ 		memory = (unsigned char *)tmp->ntdll_pos;
+ 		if (memory == 0) {
+ 			ntdll_reconstruction_clear_cache(cache);
+ 			return				(0);
+ 		}
++		if (!switch_memory_protection(memory, REPLACE_SIZE, PAGE_READWRITE, &old_protection)) {
++			ntdll_reconstruction_clear_cache(cache);
++			return				(0);
++		}
+ 		for (unsigned int i = 0; i < REPLACE_SIZE; i++) {
+ 			ch = memory[i];
+ 			memory[i] = tmp->mem[i];
+ 			tmp->mem[i] = ch;
+ 		}
++		if (!switch_memory_protection(memory, REPLACE_SIZE, old_protection, &old_protection)) {
++			ntdll_reconstruction_clear_cache(cache);
++			return				(0);
++		}
+ 		tmp = tmp->next;
+ 	}
+-	if (!switch_memory_protection(code_base, code_size, old_protection, &old_protection)) {
+-		ntdll_reconstruction_clear_cache(cache);
+-		return				(0);
+-	}
+ 	return				(cache);
+ }
+ 
