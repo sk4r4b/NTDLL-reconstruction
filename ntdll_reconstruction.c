@@ -192,7 +192,7 @@ struct hook_cache		*ntdll_reconstruction_init(void)
 			fn_rva  = addr_of_functions[ordinal];
 			if ((fn_rva < export_rva || fn_rva >= export_rva + export_size) && is_hooked((unsigned char *)ntdll_ptr + fn_rva)) {
 				ssn = find_ssn((unsigned char *)ntdll_ptr + fn_rva, 0);
-				if (ssn > -1)
+				if (ssn == -1)
 					continue;
 				cache = append_cache(cache, (void *)((unsigned char *)ntdll_ptr + fn_rva), ssn);
 			}
